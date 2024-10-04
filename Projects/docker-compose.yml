@@ -1,0 +1,236 @@
+version: "3.9"
+
+x-logging: &fluent-bit
+  driver: fluentd
+  options:
+    fluentd-address: ${FLUENT_BIT_ADDRESS}:24224
+
+services:
+  # explorer:
+  #   build:
+  #     dockerfile: Dockerfile
+  #     context: .
+  #     target: final
+  #   restart: on-failure
+  #   networks:
+  #     - network
+  #   ports:
+  #     - "44333:80"
+  #   environment:
+  #     DATABASE_HOST: database
+  #     DATABASE_PORT: 5432
+  #     DATABASE_PASSWORD: super
+  #     DATABASE_USER: postgres
+  #     DATABASE_SCHEMA: explorer
+  #     ENCOUNTER_SERVICE_URL: http://encounterservice:8091
+  #   depends_on:
+  #     - database
+
+  # stakeholderservice:
+  #   image: stakeholderservice
+  #   build:
+  #     dockerfile: Dockerfile
+  #     context: ../stakeholders/
+  #     target: final
+  #   restart: on-failure
+  #   networks:
+  #     - network
+  #   ports:
+  #     - "8093:4433"
+  #   environment:
+  #     DATABASE_HOST: database
+  #     DATABASE_PORT: 5432
+  #     DATABASE_PASSWORD: super
+  #     DATABASE_USER: postgres
+  #     DATABASE_SCHEMA: explorer
+  #     ASPNETCORE_Kestrel__Certificates__Default__Password: soa123
+  #     ASPNETCORE_Kestrel__Certificates__Default__Path: /https/aspnetapp.pfx
+  #   volumes:
+  #     - ${USERPROFILE}/.aspnet/https:/https:ro
+  #   depends_on:
+  #     - database
+
+  encounterservice:
+    image: encounterservice
+    build:
+      dockerfile: Dockerfile
+      context: ../encounter/
+      target: final
+    restart: always
+    networks:
+      - network
+      - monitoring
+    ports:
+      - "8091:8091"
+    logging: *fluent-bit
+    environment:
+      MONGO_DB_URI: mongodb://root:pass@mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  tourservice:
+    image: tourservice
+    build:
+      dockerfile: Dockerfile
+      context: ../tour/
+      target: final
+    restart: always
+    networks:
+      - network
+      - monitoring
+    ports:
+      - "8090:8090"
+    environment:
+      DATABASE_HOST: tourDatabase
+      DATABASE_PORT: 5432
+      DATABASE_PASSWORD: super
+      DATABASE_USER: postgres
+      DATABASE_SCHEMA: soa
+    logging: *fluent-bit
+    # depends_on:
+    #   - tourDatabase
+
+  followerservice:
+    image: followerservice
+    build:
+      dockerfile: Dockerfile
+      context: ../follower/
+      target: final
+    restart: always
+    environment:
+      FOLLOWER_SERVICE_ADDRESS: ${FOLLOWER_SERVICE_ADDRESS}
+    networks:
+      - network
+      - monitoring
+    ports:
+      - "8092:8092"
+    logging: *fluent-bit
+
+  # api_gateway:
+  #   image: api_gateway
+  #   build:
+  #     dockerfile: Dockerfile
+  #     context: ../api-gateway/api-gateway/
+  #   container_name: api_gateway
+  #   hostname: api_gateway
+  #   restart: always
+  #   environment:
+  #     FOLLOWER_SERVICE_ADDRESS: followerservice:8092
+  #     STAKEHOLDERS_SERVICE_ADDRESS: host.docker.internal:8093
+  #     GATEWAY_ADDRESS: ${GATEWAY_ADDRESS}
+  #   depends_on:
+  #     - followerservice
+  #     - stakeholderservice
+  #   networks:
+  #     - network
+  #   ports:
+  #     - "8001:8001"
+
+  # database:
+  #   image: postgres:13
+  #   restart: always
+  #   networks:
+  #     - network
+  #     - database
+  #     - monitoring
+  #   environment:
+  #     POSTGRES_PASSWORD: super
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_DB: explorer
+  #   volumes:
+  #     - type: volume
+  #       source: database-data
+  #       target: /var/lib/postgresql/data
+  #     - type: bind
+  #       source: explorer-init-data.sql
+  #       target: /tmp/explorer-init.sql
+  #   ports:
+  #     - "5433:5432"
+  #   logging: *fluent-bit
+  # tourDatabase:
+  #   image: postgres:13
+  #   restart: always
+  #   networks:
+  #     - network
+  #   environment:
+  #     POSTGRES_PASSWORD: super
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_DB: soa
+  #   volumes:
+  #     - type: volume
+  #       source: tour-database-data
+  #       target: /var/lib/postgresql/tourData
+  #   # ports:
+  #   #   - "5433:5432"
+
+  # NoSQL: MongoDB
+  mongo:
+    image: mongo
+    restart: always
+    networks:
+      - network
+      - monitoring
+    ports:
+      - "27017:27017"
+    logging: *fluent-bit
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: pass
+      MONGO_INITDB_DATABASE: encounterDB
+    # Docker healtcheck - checks if database is "alive"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok'
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - mongo_store:/data/db
+
+  # NoSQL: MognoExpress
+  mongo-express:
+    image: mongo-express
+    restart: always
+    networks:
+      - network
+      - monitoring
+    environment:
+      # hostname of mongo databse
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=root
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=pass
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+      - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017/
+    depends_on:
+      - mongo
+    ports:
+      - "8081:8081"
+    logging: *fluent-bit
+    volumes:
+      - mongo_express_data:/data/db
+
+  zipkin:
+    image: openzipkin/zipkin
+    restart: always
+    networks:
+      - network
+    ports:
+      - "9411:9411"
+
+volumes:
+  database-data:
+    name: explorer
+  # tour-database-data:
+  #   name: tour-explorer
+  mongo_store:
+  mongo_express_data:
+
+networks:
+  network:
+    driver: bridge
+  database:
+    name: database
+    driver: bridge
+  monitoring:
+    external: true
